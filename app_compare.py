@@ -55,6 +55,15 @@ def load_file(uploaded_file):
     else:
         return pd.read_excel(uploaded_file)
 
+def clean_id(val):
+    """Clean ID string to strip trailing .0 and whitespace."""
+    if pd.isna(val):
+        return ""
+    val_str = str(val).strip()
+    if val_str.endswith(".0"):
+        val_str = val_str[:-2]
+    return val_str
+
 def clean_value(val):
     """Clean string values and parse numbers safely."""
     if pd.isna(val):
@@ -111,11 +120,19 @@ if file1 and file2:
         if "ID" not in df1.columns or "ID" not in df2.columns:
             st.error("❌ Both files must contain an **'ID'** column to perform the comparison.")
         else:
-            # Format ID columns cleanly
-            df1["ID"] = df1["ID"].astype(str).str.strip()
-            df2["ID"] = df2["ID"].astype(str).str.strip()
+            # Safely clean and format ID columns
+            df1["ID"] = df1["ID"].apply(clean_id)
+            df2["ID"] = df2["ID"].apply(clean_id)
 
-            # Check which of the 4 requested columns exist in both files
+            # Drop empty IDs
+            df1 = df1[df1["ID"] != ""].copy()
+            df2 = df2[df2["ID"] != ""].copy()
+
+            # Deduplicate IDs to avoid index out-of-bounds
+            df1 = df1.drop_duplicates(subset=["ID"], keep="first")
+            df2 = df2.drop_duplicates(subset=["ID"], keep="first")
+
+            # Identify target columns available in both files
             found_cols = [c for c in TARGET_COLUMNS if c in df1.columns and c in df2.columns]
             missing_cols = [c for c in TARGET_COLUMNS if c not in found_cols]
 
@@ -123,30 +140,33 @@ if file1 and file2:
                 st.warning(f"⚠️ Note: The following requested column(s) were not found in both files: **{', '.join(missing_cols)}**")
 
             if st.button("🔍 Run Fee Comparison", type="primary", use_container_width=True):
-                keys_1 = set(df1["ID"])
-                keys_2 = set(df2["ID"])
+                # Set ID as index for instant, error-free matching
+                df1_indexed = df1.set_index("ID")
+                df2_indexed = df2.set_index("ID")
+
+                keys_1 = set(df1_indexed.index)
+                keys_2 = set(df2_indexed.index)
 
                 added_ids = keys_2 - keys_1
                 removed_ids = keys_1 - keys_2
                 common_ids = keys_1.intersection(keys_2)
 
-                df_added = df2[df2["ID"].isin(added_ids)]
-                df_removed = df1[df1["ID"].isin(removed_ids)]
+                df_added = df2_indexed.loc[list(added_ids)].reset_index() if added_ids else pd.DataFrame()
+                df_removed = df1_indexed.loc[list(removed_ids)].reset_index() if removed_ids else pd.DataFrame()
 
-                # Compare the common IDs line by line
+                # Safely compare overlapping records without using .iloc[0]
                 diff_rows = []
                 for id_val in common_ids:
-                    row1 = df1[df1["ID"] == id_val].iloc[0]
-                    row2 = df2[df2["ID"] == id_val].iloc[0]
+                    row1 = df1_indexed.loc[id_val]
+                    row2 = df2_indexed.loc[id_val]
 
                     for col in found_cols:
                         v1 = clean_value(row1[col])
                         v2 = clean_value(row2[col])
 
-                        # Check for difference (float comparison or exact text)
                         if isinstance(v1, float) and isinstance(v2, float):
                             diff = round(v2 - v1, 2)
-                            if abs(diff) > 0.001:  # Difference exists
+                            if abs(diff) > 0.001:
                                 diff_rows.append({
                                     "ID": id_val,
                                     "Field": col,
@@ -172,8 +192,8 @@ if file1 and file2:
                 st.header("📊 Comparison Results")
 
                 m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Total IDs (File 1)", len(df1))
-                m2.metric("Total IDs (File 2)", len(df2))
+                m1.metric("Total Unique IDs (File 1)", len(df1_indexed))
+                m2.metric("Total Unique IDs (File 2)", len(df2_indexed))
                 m3.metric("🆕 Added IDs", len(df_added))
                 m4.metric("❌ Removed IDs", len(df_removed))
 
@@ -183,7 +203,6 @@ if file1 and file2:
                     f"❌ Removed IDs ({len(df_removed)})"
                 ])
 
-                # Tab 1: Discrepancies in target columns
                 with tab_diff:
                     if df_diff.empty:
                         st.success("🎉 No differences found! All TERMLY, MONTHLY, PESB FEE, and MONTLY AFTER FEE values match perfectly.")
@@ -198,7 +217,6 @@ if file1 and file2:
                             mime="text/csv"
                         )
 
-                # Tab 2: Added IDs
                 with tab_added:
                     if df_added.empty:
                         st.info("No new IDs were added in File 2.")
@@ -211,7 +229,6 @@ if file1 and file2:
                             mime="text/csv"
                         )
 
-                # Tab 3: Removed IDs
                 with tab_removed:
                     if df_removed.empty:
                         st.info("No IDs were removed in File 2.")
