@@ -5,13 +5,13 @@ import streamlit as st
 # ==========================================
 # 1. PAGE CONFIGURATION
 # ==========================================
-logo_icon = "📊"
+logo_icon = "💰"
 for possible_name in ["logo.png", "logo.PNG", "logo.jpg", "logo.jpeg", "logo.webp"]:
     if os.path.exists(possible_name):
         logo_icon = possible_name
         break
 
-st.set_page_config(page_title="Data File Comparison Tool", page_icon=logo_icon, layout="wide")
+st.set_page_config(page_title="Fee Comparison Tool", page_icon=logo_icon, layout="wide")
 
 # ==========================================
 # 2. HIDE ALL STREAMLIT UI, BADGES & TOOLBARS
@@ -43,8 +43,30 @@ hide_st_style = """
 """
 st.markdown(hide_st_style, unsafe_allow_html=True)
 
+# Target columns to strictly compare
+TARGET_COLUMNS = ["TERMLY", "MONTHLY", "PESB FEE", "MONTLY AFTER FEE"]
+
 # ==========================================
-# 3. HEADER SECTION
+# 3. HELPER FUNCTIONS
+# ==========================================
+def load_file(uploaded_file):
+    if uploaded_file.name.endswith(".csv"):
+        return pd.read_csv(uploaded_file)
+    else:
+        return pd.read_excel(uploaded_file)
+
+def clean_value(val):
+    """Clean string values and parse numbers safely."""
+    if pd.isna(val):
+        return 0.0
+    val_str = str(val).replace(",", "").replace("$", "").replace("RM", "").strip()
+    try:
+        return float(val_str)
+    except ValueError:
+        return val_str
+
+# ==========================================
+# 4. HEADER SECTION
 # ==========================================
 logo_file = None
 for possible_name in ["logo.png", "logo.PNG", "logo.jpg", "logo.jpeg", "logo.webp"]:
@@ -57,154 +79,150 @@ if logo_file:
     with col_logo:
         st.image(logo_file, width=90)
     with col_title:
-        st.title("File Comparison Tool")
+        st.title("Fee Comparison Tool")
 else:
-    st.title("File Comparison Tool")
+    st.title("Fee Comparison Tool")
 
-st.caption("Upload two files (CSV or Excel) to compare changes, additions, and deletions.")
-
-
-# Helper function to read uploaded files
-def load_file(uploaded_file):
-    if uploaded_file.name.endswith(".csv"):
-        return pd.read_csv(uploaded_file)
-    else:
-        return pd.read_excel(uploaded_file)
+st.caption("Upload two files to match records by **ID** and compare **TERMLY**, **MONTHLY**, **PESB FEE**, and **MONTLY AFTER FEE**.")
 
 
 # ==========================================
-# 4. FILE UPLOADER SECTION
+# 5. FILE UPLOADER SECTION
 # ==========================================
 col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("1. Baseline File (Old/Original)")
+    st.subheader("1. Baseline File (File 1)")
     file1 = st.file_uploader("Upload File 1", type=["csv", "xlsx", "xls"], key="file1")
 
 with col2:
-    st.subheader("2. Target File (New/Updated)")
+    st.subheader("2. Target File (File 2)")
     file2 = st.file_uploader("Upload File 2", type=["csv", "xlsx", "xls"], key="file2")
 
 # ==========================================
-# 5. COMPARISON PROCESSOR
+# 6. COMPARISON LOGIC
 # ==========================================
 if file1 and file2:
     try:
         df1 = load_file(file1)
         df2 = load_file(file2)
 
-        st.markdown("---")
-        st.subheader("3. Select Unique Key Column")
-
-        # Find common columns across both files
-        common_cols = list(set(df1.columns).intersection(set(df2.columns)))
-
-        if not common_cols:
-            st.error("❌ The two files do not share any column names. Please upload files with matching headers.")
+        # Check for ID column presence
+        if "ID" not in df1.columns or "ID" not in df2.columns:
+            st.error("❌ Both files must contain an **'ID'** column to perform the comparison.")
         else:
-            key_col = st.selectbox(
-                "Select a unique identifier column to match records (e.g. Email, ID, Employee Number):",
-                options=common_cols,
-            )
+            # Format ID columns cleanly
+            df1["ID"] = df1["ID"].astype(str).str.strip()
+            df2["ID"] = df2["ID"].astype(str).str.strip()
 
-            if st.button("🔍 Compare Files", type="primary"):
-                # Ensure key values are strings for safe matching
-                df1[key_col] = df1[key_col].astype(str).str.strip()
-                df2[key_col] = df2[key_col].astype(str).str.strip()
+            # Check which of the 4 requested columns exist in both files
+            found_cols = [c for c in TARGET_COLUMNS if c in df1.columns and c in df2.columns]
+            missing_cols = [c for c in TARGET_COLUMNS if c not in found_cols]
 
-                # Identify Added & Deleted Rows
-                keys_1 = set(df1[key_col])
-                keys_2 = set(df2[key_col])
+            if missing_cols:
+                st.warning(f"⚠️ Note: The following requested column(s) were not found in both files: **{', '.join(missing_cols)}**")
 
-                added_keys = keys_2 - keys_1
-                removed_keys = keys_1 - keys_2
-                common_keys = keys_1.intersection(keys_2)
+            if st.button("🔍 Run Fee Comparison", type="primary", use_container_width=True):
+                keys_1 = set(df1["ID"])
+                keys_2 = set(df2["ID"])
 
-                df_added = df2[df2[key_col].isin(added_keys)]
-                df_removed = df1[df1[key_col].isin(removed_keys)]
+                added_ids = keys_2 - keys_1
+                removed_ids = keys_1 - keys_2
+                common_ids = keys_1.intersection(keys_2)
 
-                # Identify Modified Fields in Common Rows
-                df1_common = df1[df1[key_col].isin(common_keys)].sort_values(by=key_col).reset_index(drop=True)
-                df2_common = df2[df2[key_col].isin(common_keys)].sort_values(by=key_col).reset_index(drop=True)
+                df_added = df2[df2["ID"].isin(added_ids)]
+                df_removed = df1[df1["ID"].isin(removed_ids)]
 
-                # Find modified columns
-                compare_cols = [col for col in common_cols if col != key_col]
-                
-                modified_records = []
-                for k in common_keys:
-                    row1 = df1_common[df1_common[key_col] == k].iloc[0]
-                    row2 = df2_common[df2_common[key_col] == k].iloc[0]
+                # Compare the common IDs line by line
+                diff_rows = []
+                for id_val in common_ids:
+                    row1 = df1[df1["ID"] == id_val].iloc[0]
+                    row2 = df2[df2["ID"] == id_val].iloc[0]
 
-                    for col in compare_cols:
-                        val1 = str(row1[col]) if pd.notna(row1[col]) else ""
-                        val2 = str(row2[col]) if pd.notna(row2[col]) else ""
+                    for col in found_cols:
+                        v1 = clean_value(row1[col])
+                        v2 = clean_value(row2[col])
 
-                        if val1 != val2:
-                            modified_records.append({
-                                key_col: k,
+                        # Check for difference (float comparison or exact text)
+                        if isinstance(v1, float) and isinstance(v2, float):
+                            diff = round(v2 - v1, 2)
+                            if abs(diff) > 0.001:  # Difference exists
+                                diff_rows.append({
+                                    "ID": id_val,
+                                    "Field": col,
+                                    "File 1 (Old)": round(v1, 2),
+                                    "File 2 (New)": round(v2, 2),
+                                    "Difference (File 2 - File 1)": diff
+                                })
+                        elif str(v1) != str(v2):
+                            diff_rows.append({
+                                "ID": id_val,
                                 "Field": col,
-                                "Original Value (File 1)": val1,
-                                "New Value (File 2)": val2
+                                "File 1 (Old)": v1,
+                                "File 2 (New)": v2,
+                                "Difference (File 2 - File 1)": "N/A"
                             })
 
-                df_modified = pd.DataFrame(modified_records)
+                df_diff = pd.DataFrame(diff_rows)
 
                 # ==========================================
-                # 6. RESULTS DASHBOARD
+                # 7. DISPLAY RESULTS
                 # ==========================================
                 st.markdown("---")
-                st.header("📊 Comparison Results Summary")
+                st.header("📊 Comparison Results")
 
                 m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Total File 1 Rows", len(df1))
-                m2.metric("Total File 2 Rows", len(df2))
-                m3.metric("🆕 Added Rows", len(df_added))
-                m4.metric("❌ Removed Rows", len(df_removed))
+                m1.metric("Total IDs (File 1)", len(df1))
+                m2.metric("Total IDs (File 2)", len(df2))
+                m3.metric("🆕 Added IDs", len(df_added))
+                m4.metric("❌ Removed IDs", len(df_removed))
 
-                tab_added, tab_removed, tab_modified = st.tabs([
-                    f"🆕 Added ({len(df_added)})", 
-                    f"❌ Removed ({len(df_removed)})", 
-                    f"✏️ Modified ({len(df_modified)})"
+                tab_diff, tab_added, tab_removed = st.tabs([
+                    f"✏️ Discrepancies Found ({len(df_diff)})",
+                    f"🆕 Added IDs ({len(df_added)})",
+                    f"❌ Removed IDs ({len(df_removed)})"
                 ])
 
-                # Tab 1: Added Records
+                # Tab 1: Discrepancies in target columns
+                with tab_diff:
+                    if df_diff.empty:
+                        st.success("🎉 No differences found! All TERMLY, MONTHLY, PESB FEE, and MONTLY AFTER FEE values match perfectly.")
+                    else:
+                        st.write("Below are the specific IDs where **TERMLY**, **MONTHLY**, **PESB FEE**, or **MONTLY AFTER FEE** changed:")
+                        st.dataframe(df_diff, use_container_width=True)
+
+                        st.download_button(
+                            "📥 Export Discrepancies Report to CSV",
+                            data=df_diff.to_csv(index=False).encode("utf-8"),
+                            file_name="fee_discrepancies.csv",
+                            mime="text/csv"
+                        )
+
+                # Tab 2: Added IDs
                 with tab_added:
                     if df_added.empty:
-                        st.info("No new records were added in File 2.")
+                        st.info("No new IDs were added in File 2.")
                     else:
                         st.dataframe(df_added, use_container_width=True)
                         st.download_button(
-                            "📥 Export Added Records",
+                            "📥 Export Added IDs to CSV",
                             data=df_added.to_csv(index=False).encode("utf-8"),
-                            file_name="added_records.csv",
+                            file_name="added_ids.csv",
                             mime="text/csv"
                         )
 
-                # Tab 2: Removed Records
+                # Tab 3: Removed IDs
                 with tab_removed:
                     if df_removed.empty:
-                        st.info("No records were removed in File 2.")
+                        st.info("No IDs were removed in File 2.")
                     else:
                         st.dataframe(df_removed, use_container_width=True)
                         st.download_button(
-                            "📥 Export Removed Records",
+                            "📥 Export Removed IDs to CSV",
                             data=df_removed.to_csv(index=False).encode("utf-8"),
-                            file_name="removed_records.csv",
-                            mime="text/csv"
-                        )
-
-                # Tab 3: Modified Records
-                with tab_modified:
-                    if df_modified.empty:
-                        st.success("No differences found in overlapping records!")
-                    else:
-                        st.dataframe(df_modified, use_container_width=True)
-                        st.download_button(
-                            "📥 Export Modified Fields Summary",
-                            data=df_modified.to_csv(index=False).encode("utf-8"),
-                            file_name="modified_fields.csv",
+                            file_name="removed_ids.csv",
                             mime="text/csv"
                         )
 
     except Exception as e:
-        st.error(f"Error reading files: {e}")
+        st.error(f"Error processing files: {e}")
