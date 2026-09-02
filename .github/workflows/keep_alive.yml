@@ -1,0 +1,15 @@
+name: Keep Streamlit Alive
+
+on:
+  schedule:
+    # Runs every 6 hours automatically
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send HTTP Ping
+        run: |
+          curl -s -I "https://comparisoninv.streamlit.app" > /dev/null
